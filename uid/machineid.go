@@ -23,14 +23,14 @@ func MachineIDFromEnv() (int64, error) {
 		return 0, fmt.Errorf("%s is not set", MachineIDEnvVar)
 	}
 
-	// TODO:
-	//  1. n, err := strconv.ParseInt(val, 10, 64)
-	//     if err != nil { return 0, fmt.Errorf("invalid value %q: %w", val, err) }
-	//  2. if n < 0 || n > MaxMachineID { return 0, fmt.Errorf("value %d out of range [0, %d]", n, MaxMachineID) }
-	//  3. return n, nil
-
-	_ = strconv.ParseInt // hint: use this to parse val
-	return 0, errors.New("not implemented")
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid value %q: %w", val, err)
+	}
+	if n < 0 || n > MaxMachineID {
+		return 0, fmt.Errorf("value %d out of range [0, %d]", n, MaxMachineID)
+	}
+	return n, nil
 }
 
 // MachineIDFromHostname hashes the system hostname with FNV-1a 32-bit and
@@ -44,8 +44,7 @@ func MachineIDFromHostname() (int64, error) {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(hostname))
 
-	// TODO: return int64(h.Sum32()) & MaxMachineID, nil
-	return 0, errors.New("not implemented")
+	return int64(h.Sum32()) & MaxMachineID, nil
 }
 
 // MachineIDFromIP hashes the first non-loopback IPv4 address with FNV-1a 32-bit
@@ -57,22 +56,20 @@ func MachineIDFromIP() (int64, error) {
 		return 0, err
 	}
 
-	// TODO:
-	//  for _, addr := range addrs {
-	//      ipNet, ok := addr.(*net.IPNet)
-	//      if !ok { continue }
-	//
-	//      ip := ipNet.IP.To4()        // nil for IPv6 addresses
-	//      if ip == nil || ip.IsLoopback() { continue }
-	//
-	//      h := fnv.New32a()
-	//      h.Write(ip)
-	//      return int64(h.Sum32()) & MaxMachineID, nil
-	//  }
-	//  return 0, errors.New("no suitable non-loopback IPv4 address found")
-
-	_ = addrs
-	return 0, errors.New("not implemented")
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		ip := ipNet.IP.To4()
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		h := fnv.New32a()
+		h.Write(ip)
+		return int64(h.Sum32()) & MaxMachineID, nil
+	}
+	return 0, errors.New("no suitable non-loopback IPv4 address found")
 }
 
 // ResolveMachineID tries sources in priority order and returns the first success:
@@ -81,7 +78,11 @@ func MachineIDFromIP() (int64, error) {
 //  2. IP address hash       (MachineIDFromIP)
 //  3. Hostname hash         (MachineIDFromHostname)
 func ResolveMachineID() (int64, error) {
-	// TODO: try each source; return the first non-error result.
-	//       If all fail, return the last error.
-	return 0, errors.New("not implemented")
+	if id, err := MachineIDFromEnv(); err == nil {
+		return id, nil
+	}
+	if id, err := MachineIDFromIP(); err == nil {
+		return id, nil
+	}
+	return MachineIDFromHostname()
 }

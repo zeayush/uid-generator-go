@@ -54,28 +54,29 @@ type Snowflake struct {
 //   - machineID must be in [0, MaxMachineID].
 //   - Pass a zero time.Time{} to use DefaultEpoch.
 func NewSnowflake(machineID int64, epoch time.Time) (*Snowflake, error) {
-	// TODO:
-	//  1. If machineID < 0 || machineID > MaxMachineID:
-	//         return nil, errors.New("machineID out of range [0, MaxMachineID]")
-	//  2. If epoch.IsZero():
-	//         epoch = DefaultEpoch
-	//  3. Return &Snowflake{epoch: epoch, machineID: machineID}, nil
-
-	return nil, errors.New("not implemented")
+	if machineID < 0 || machineID > MaxMachineID {
+		return nil, errors.New("machineID out of range [0, MaxMachineID]")
+	}
+	if epoch.IsZero() {
+		epoch = DefaultEpoch
+	}
+	return &Snowflake{epoch: epoch, machineID: machineID}, nil
 }
 
 // currentMS returns the number of milliseconds elapsed since s.epoch.
 // Must only be called while holding s.mu (or from within NextID).
 func (s *Snowflake) currentMS() int64 {
-	// TODO: return time.Since(s.epoch).Milliseconds()
-	return 0
+	return time.Since(s.epoch).Milliseconds()
 }
 
 // waitNextMS spins until the clock advances past last, and returns the new ms.
 // Call this when the sequence counter overflows MaxSequence.
 func (s *Snowflake) waitNextMS(last int64) int64 {
-	// TODO: loop calling s.currentMS() until it returns a value > last, then return it.
-	return 0
+	for {
+		if ms := s.currentMS(); ms > last {
+			return ms
+		}
+	}
 }
 
 // NextID returns the next globally unique 64-bit Snowflake ID.
@@ -86,50 +87,35 @@ func (s *Snowflake) NextID() (int64, error) {
 
 	now := s.currentMS()
 
-	// TODO step 1 — clock drift guard:
-	//   The system clock can occasionally jump backward (NTP correction, VM migration).
-	//   Decide how to handle now < s.lastMS:
-	//
-	//   Option A – spin (self-healing):
-	//       for now < s.lastMS { now = s.currentMS() }
-	//
-	//   Option B – error (strict):
-	//       if now < s.lastMS { return 0, errors.New("clock moved backward") }
-	//
-	//   Choose one, implement it, and add a one-line comment explaining your choice.
+	// Option B – return an error on clock drift; makes the problem immediately visible
+	// rather than spinning indefinitely, which can hang under severe NTP corrections.
+	if now < s.lastMS {
+		return 0, errors.New("clock moved backward")
+	}
 
-	// TODO step 2 — same millisecond:
-	//   if now == s.lastMS {
-	//       s.sequence++
-	//       if s.sequence > MaxSequence {
-	//           // sequence exhausted — park until the clock ticks forward
-	//           now = s.waitNextMS(s.lastMS)
-	//           s.sequence = 0
-	//           s.lastMS = now
-	//       }
-	//   }
+	if now == s.lastMS {
+		s.sequence++
+		if s.sequence > MaxSequence {
+			// sequence exhausted — park until the clock ticks forward
+			now = s.waitNextMS(s.lastMS)
+			s.sequence = 0
+			s.lastMS = now
+		}
+	} else {
+		s.sequence = 0
+		s.lastMS = now
+	}
 
-	// TODO step 3 — new millisecond:
-	//   if now > s.lastMS {
-	//       s.sequence = 0
-	//       s.lastMS = now
-	//   }
-
-	// TODO step 4 — compose and return the 64-bit ID:
-	//   id := (now << timestampShift) | (s.machineID << machineIDShift) | s.sequence
-	//   return id, nil
-
-	_ = now // remove once you use it above
-	return 0, errors.New("not implemented")
+	id := (now << timestampShift) | (s.machineID << machineIDShift) | s.sequence
+	return id, nil
 }
 
 // DecomposeID splits a Snowflake ID back into its three components.
 // Pass the same epoch that was given to NewSnowflake.
 func DecomposeID(id int64, epoch time.Time) (ts time.Time, machineID int64, sequence int64) {
-	// TODO:
-	//   sequence  = id & MaxSequence
-	//   machineID = (id >> machineIDShift) & MaxMachineID
-	//   tsMS      = id >> timestampShift
-	//   ts        = epoch.Add(time.Duration(tsMS) * time.Millisecond)
-	return time.Time{}, 0, 0
+	sequence = id & MaxSequence
+	machineID = (id >> machineIDShift) & MaxMachineID
+	tsMS := id >> timestampShift
+	ts = epoch.Add(time.Duration(tsMS) * time.Millisecond)
+	return ts, machineID, sequence
 }
