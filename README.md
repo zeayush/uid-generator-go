@@ -1,252 +1,127 @@
 # uid-generator-go
 
-![CI](https://github.com/zeayush/uid-generator-go/actions/workflows/go-ci.yml/badge.svg)
+[![CI](https://github.com/zeayush/uid-generator-go/actions/workflows/go-ci.yml/badge.svg)](https://github.com/zeayush/uid-generator-go/actions/workflows/go-ci.yml)
 ![Go](https://img.shields.io/badge/Go-1.22-00ADD8?logo=go)
-![License](https://img.shields.io/badge/license-MIT-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
 
-Two production-grade unique ID generators implemented from scratch in Go — a **Snowflake** 64-bit integer generator and a **ULID** 128-bit lexicographically sortable identifier.
+Unique ID generation in Go — API-consumer port of the Rust implementation,
+including Snowflake-style 64-bit IDs and ULID.
 
-> **Learning exercise** — function bodies are left as `TODO` stubs for you to implement. Tests are pre-written and pass once your implementations are correct. Once complete, this is a production-ready library.
-
----
-
-## What are these?
-
-**Snowflake** IDs were invented by Twitter in 2010 to replace database auto-increment in distributed systems. A single 64-bit integer embeds a millisecond timestamp, a machine ID, and a per-millisecond sequence counter — so IDs generated across thousands of machines are unique without any coordination or central authority.
-
-**ULID** (Universally Unique Lexicographically Sortable Identifier) solves a different problem: UUID is globally unique but sorts randomly in indexes, causing B-tree fragmentation and poor write locality. ULID packs a 48-bit timestamp into the high bits so string-sorted order equals time-sorted order.
+Part of a distributed systems portfolio implementing every system from **Alex
+Xu's System Design Interview (Vol. 1 & 2)**. This covers **Chapter 7 —
+Design a Unique ID Generator in Distributed Systems**.
 
 ---
 
-## How it Works
+## What It Provides
 
-### Snowflake — bit packing
-
-```
-  63        22        12        0
-  +----------+---------+--------+
-  |  41-bit  | 10-bit  | 12-bit |
-  | timestamp| machine |sequence|
-  +----------+---------+--------+
-
-  epoch: 2020-01-01 00:00:00 UTC  (configurable)
-```
-
-- **timestamp** — milliseconds since the custom epoch. 41 bits = ~69 years before rollover (valid past 2089).
-- **machine ID** — unique per generator instance (0-1023). Resolved from env var, IP hash, or hostname hash.
-- **sequence** — wraps at 4095 per millisecond; generator parks (busy-waits) until the next ms tick when exhausted.
-
-Assembly and decomposition:
-
-```
-id = (timestampMS << 22) | (machineID << 12) | sequence
-```
-
-### ULID — timestamp prefix + entropy suffix
-
-```
-  01ARZ3NDEKTSV4RRFFQ69G5FAV
-  +----------++-------------+
-   10 chars    16 chars
-   48-bit ms   80-bit random
-```
-
-128 raw bits are encoded as 26 Crockford Base32 characters (omits I L O U to prevent transcription errors). Two ULIDs from different milliseconds sort correctly as plain strings — no index tricks required.
+- **Snowflake 64-bit IDs**: 41-bit timestamp, 10-bit machine ID, 12-bit sequence
+- **ULID**: 48-bit timestamp + 80-bit randomness, lexicographically sortable
+- **Custom epoch**: configurable start date
+- **Machine ID resolution**: env var, IP hash, or hostname hash
+- **Clock drift protection**: backward clock movement parks until safe time
+- **Sequence exhaustion handling**: waits for next millisecond after 4096 IDs/ms
 
 ---
 
 ## Quick Start
 
-#### Snowflake
-
-```go
-import "uid-generator-go/uid"
-
-mid, _ := uid.ResolveMachineID()            // env -> IP -> hostname
-sf, _ := uid.NewSnowflake(mid, time.Time{}) // zero epoch -> DefaultEpoch (2020-01-01)
-
-id, err := sf.NextID()                      // int64 -- monotonically increasing
-ts, machine, seq := uid.DecomposeID(id)     // inspect each field
+```sh
+go get github.com/zeayush/uid-generator-go
 ```
 
-#### ULID
-
 ```go
-u, err := uid.NewULID()     // uses time.Now()
-fmt.Println(u)              // "01HXK7P9ZQABCDEFGHJKMNPQ" -- 26 chars
+package main
 
-u2, _ := uid.ParseULID("01HXK7P9ZQABCDEFGHJKMNPQ")
-t := u2.Time()              // time.Time, millisecond precision
-cmp := u.Compare(u2)        // -1 / 0 / +1 -- same contract as bytes.Compare
-```
+import (
+	"fmt"
+	"time"
 
-#### Machine ID
+	"github.com/zeayush/uid-generator-go/uid"
+)
 
-```go
-// Automatic resolution (recommended)
-mid, err := uid.ResolveMachineID()
+func main() {
+	machineID, _ := uid.ResolveMachineID()
+	sf, _ := uid.NewSnowflake(machineID, time.Time{})
 
-// Explicit sources
-mid, err = uid.MachineIDFromEnv()      // reads UID_MACHINE_ID env var
-mid, err = uid.MachineIDFromIP()       // FNV-1a hash of primary IPv4
-mid, err = uid.MachineIDFromHostname() // FNV-1a hash of os.Hostname()
+	id, _ := sf.NextID()
+	ts, mid, seq := uid.DecomposeID(id, uid.DefaultEpoch)
+
+	u, _ := uid.NewULID()
+	parsed, _ := uid.ParseULID(u.String())
+
+	fmt.Println(id, ts, mid, seq, parsed)
+}
 ```
 
 ---
 
 ## API
 
-### Snowflake
-
 ```go
-var DefaultEpoch time.Time                           // 2020-01-01 00:00:00 UTC
+var DefaultEpoch time.Time
 const MaxMachineID int64 = 1023
-const MaxSequence  int64 = 4095
+const MaxSequence int64 = 4095
 
 func NewSnowflake(machineID int64, epoch time.Time) (*Snowflake, error)
 func (s *Snowflake) NextID() (int64, error)
-func DecomposeID(id int64) (timestampMS, machineID, sequence int64)
-```
+func DecomposeID(id int64, epoch time.Time) (time.Time, int64, int64)
 
-`NextID` is safe for concurrent use. `NewSnowflake` returns an error for `machineID` outside `[0, 1023]`.
-
-### ULID
-
-```go
 func NewULID() (ULID, error)
 func NewULIDWithTime(t time.Time) (ULID, error)
 func ParseULID(s string) (ULID, error)
-
-func (u ULID) String() string          // 26-char Crockford Base32
-func (u ULID) Time() time.Time         // millisecond precision
-func (u ULID) Compare(other ULID) int  // -1 / 0 / +1
-```
-
-`ParseULID` accepts upper- and lower-case input and maps I->1, L->1, O->0 per the Crockford spec.
-
-### Machine ID
-
-```go
-const MachineIDEnvVar = "UID_MACHINE_ID"
+func (u ULID) String() string
+func (u ULID) Time() time.Time
+func (u ULID) Compare(other ULID) int
 
 func MachineIDFromEnv() (int64, error)
-func MachineIDFromHostname() (int64, error)
 func MachineIDFromIP() (int64, error)
-func ResolveMachineID() (int64, error)   // tries sources in priority order
+func MachineIDFromHostname() (int64, error)
+func ResolveMachineID() (int64, error)
 ```
-
----
-
-## Key Design Decisions
-
-| Decision | Rationale |
-|---|---|
-| Custom epoch (2020-01-01) | Shifts the 41-bit counter forward -- IDs stay valid past 2089 vs 2039 with a Unix epoch |
-| sync.Mutex on NextID | Simpler than atomics; fast enough for any realistic single-generator throughput |
-| Busy-wait on sequence exhaustion | Avoids time.Sleep jitter -- the spin completes in < 1 ms in practice |
-| crypto/rand for ULID entropy | OS entropy eliminates all birthday-collision risk at realistic throughputs |
-| FNV-1a 32-bit for machine ID hash | No external dependencies, deterministic, hardware-friendly |
-| Crockford Base32 for ULID encoding | 5 bits/character is maximally efficient; omitting I L O U prevents hand-transcription errors |
-| time.Time epoch, not int64 | Readable API -- callers pass time.Date(2024, 1, 1, ...) instead of a raw ms offset |
 
 ---
 
 ## Benchmarks
 
-```bash
-go test -bench=. -benchmem -benchtime=5s ./bench/
+```sh
+go test -bench=. -benchmem ./bench
 ```
 
-Target performance (single-threaded, post-implementation):
+Current throughput benchmark output on Apple M1:
 
-| Benchmark | Target |
+| Benchmark | Result |
 |---|---|
-| BenchmarkSnowflake_SingleThread | >= 4 000 000 IDs/sec |
-| BenchmarkSnowflake_Parallel | scales with goroutines (mutex-bound) |
-| BenchmarkULID_SingleThread | >= 1 000 000 IDs/sec |
-| BenchmarkULID_Parallel | scales with goroutines |
+| `BenchmarkSnowflake_SingleThread` | ~4.09M IDs/sec |
+| `BenchmarkULID_SingleThread` | ~4.65M IDs/sec |
 
-The Snowflake ceiling of 4 096 000 IDs/sec is architectural (12-bit sequence field) -- not a code quality issue. The ULID ceiling is bounded by crypto/rand throughput.
+Snowflake has a hard architectural ceiling of $4096 \times 1000 = 4{,}096{,}000$
+IDs/sec from its 12-bit sequence field.
 
 ---
 
 ## Tests
 
-```bash
+```sh
 go test -v -race ./...
 ```
 
-**Snowflake** (10 tests): invalid machine ID, default epoch, custom epoch, 10k unique IDs, 5k monotonic IDs, 10k concurrent unique IDs, machine ID embedded in output, decompose round-trip, sequence overflow parking, custom epoch timestamp field.
-
-**ULID** (9 tests): 26-char length, 1k unique IDs, sort order, parse round-trip, invalid length, invalid char, time round-trip, Compare ordering, case-insensitive parse.
-
-**Machine ID** (5 tests): valid env var, unset env var error, out-of-range error, hostname in-range, fallthrough to hostname when env unset.
+Coverage includes uniqueness, monotonicity, concurrent generation, sequence
+overflow handling, ULID parse and ordering behavior, and machine ID resolution
+fallback order.
 
 ---
 
-## Project Structure
+## Project Criteria
 
-```
-uid-generator-go/
-+-- uid/
-|   +-- snowflake.go        <- Snowflake generator  (your implementation)
-|   +-- snowflake_test.go   <- Snowflake tests      (pre-written)
-|   +-- ulid.go             <- ULID generator       (your implementation)
-|   +-- ulid_test.go        <- ULID tests           (pre-written)
-|   +-- machineid.go        <- Machine ID sources   (your implementation)
-|   +-- machineid_test.go   <- Machine ID tests     (pre-written)
-+-- bench/
-|   +-- bench_test.go       <- throughput benchmarks
-+-- .github/
-|   +-- workflows/
-|       +-- go-ci.yml       <- CI: test + race + bench smoke
-+-- go.mod
-+-- README.md
-```
-
----
-
-## Implementation Guide
-
-Work through the files in this order -- each step builds on the previous one.
-
-### Step 1 -- uid/machineid.go
-
-Start here because Snowflake depends on a valid machine ID.
-
-1. `MachineIDFromEnv` -- parse with `strconv.ParseInt`, validate `[0, MaxMachineID]`.
-2. `MachineIDFromHostname` -- `int64(h.Sum32()) & MaxMachineID` using `hash/fnv.New32a()`.
-3. `MachineIDFromIP` -- iterate `net.InterfaceAddrs()`, hash the first non-loopback `net.IP.To4()`.
-4. `ResolveMachineID` -- call each source in priority order, return the first non-error result.
-
-### Step 2 -- uid/snowflake.go
-
-1. `NewSnowflake` -- validate `machineID`, apply `DefaultEpoch` when `epoch.IsZero()`.
-2. `currentMS` -- `time.Since(s.epoch).Milliseconds()`.
-3. `waitNextMS` -- spin calling `currentMS()` until the result exceeds `last`.
-4. `NextID` -- implement the four-step assembly (clock drift -> same-ms -> new-ms -> shift-or compose).
-5. `DecomposeID` -- reverse the shifts with right-shifts and bit masks.
-
-### Step 3 -- uid/ulid.go
-
-1. `NewULIDWithTime` -- validate 48-bit range, big-endian encode ms into bytes 0-5, fill bytes 6-15 with `crypto/rand`.
-2. `ULID.String` -- pack 128 bits into 26 x 5-bit Crockford characters (bit table is in the source comment).
-3. `ParseULID` -- validate length, map each character through `decodeBase32Byte`, reassemble the byte array.
-4. `ULID.Time` -- reconstruct ms from bytes 0-5 (reverse of the encoding step).
-5. `ULID.Compare` -- `bytes.Compare` works directly on the `[16]byte` array.
-6. `decodeBase32Byte` -- Crockford table with aliases I->1, L->1, O->0.
-
----
-
-## Machine ID Resolution Order
-
-| Priority | Source | Mechanism |
-|---|---|---|
-| 1 | UID_MACHINE_ID env var | Explicit integer override -- use this in production |
-| 2 | Primary non-loopback IPv4 | FNV-1a hash of the raw 4-byte IP address |
-| 3 | os.Hostname() | FNV-1a hash of the hostname string |
-
-Set `UID_MACHINE_ID=<n>` to guarantee the same machine ID across restarts and redeployments.
+| Item | Status |
+|---|---|
+| Duration | Scoped to a 2-week build window |
+| Language rationale | Rust for hot paths, Go port for consumer APIs |
+| Goal | OSS library for pkg.go.dev and internal service reuse |
+| Stack | Go 1.22, benchmark package, GitHub Actions, Rust parity |
+| Deliverable shape | Publish-ready module + docs + benchmark evidence |
+| Feature set | Snowflake + ULID + custom epoch + machine ID fallback + drift/overflow handling |
 
 ---
 

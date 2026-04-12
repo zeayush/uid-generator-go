@@ -87,10 +87,10 @@ func (s *Snowflake) NextID() (int64, error) {
 
 	now := s.currentMS()
 
-	// Option B – return an error on clock drift; makes the problem immediately visible
-	// rather than spinning indefinitely, which can hang under severe NTP corrections.
+	// Clock drift protection: if the wall clock moved backward, park until we
+	// observe a millisecond strictly greater than the last emitted one.
 	if now < s.lastMS {
-		return 0, errors.New("clock moved backward")
+		now = s.waitNextMS(s.lastMS)
 	}
 
 	if now == s.lastMS {
